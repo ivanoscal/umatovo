@@ -29,8 +29,7 @@ version = 1.0.0
 
 # (list) Application requirements
 # comma separated e.g. requirements = sqlite3,kivy
-# Note: opencv requires special p4a recipe
-requirements = python3,kivy==2.2.1,opencv,numpy,plyer,android,pillow
+requirements = python3,kivy,numpy,plyer,pillow,opencv
 
 # (str) Custom source folders for requirements
 # Sets custom source for any requirements with recipes

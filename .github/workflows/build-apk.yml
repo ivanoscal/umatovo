@@ -11,25 +11,86 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Build with Buildozer Docker
-      uses: ArtemSBulgakov/buildozer-action@v1
-      id: buildozer
+    - name: Set up Python
+      uses: actions/setup-python@v5
       with:
-        command: buildozer android debug
-        buildozer_version: stable
+        python-version: '3.10'
 
-    - name: Upload APK artifact
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          python3-pip \
+          build-essential \
+          git \
+          zip \
+          unzip \
+          openjdk-17-jdk \
+          autoconf \
+          libtool \
+          pkg-config \
+          zlib1g-dev \
+          libncurses5-dev \
+          libncursesw5-dev \
+          libtinfo5 \
+          cmake \
+          libffi-dev \
+          libssl-dev \
+          automake
+        
+        # Install buildozer and dependencies
+        pip install --upgrade pip wheel setuptools
+        pip install cython==0.29.33 virtualenv buildozer
+
+    - name: Cache Buildozer
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.buildozer
+          .buildozer
+        key: ${{ runner.os }}-buildozer-${{ hashFiles('buildozer.spec') }}
+        restore-keys: |
+          ${{ runner.os }}-buildozer-
+
+    - name: Build APK
+      run: |
+        # Accept SDK licenses
+        export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+        
+        # Build debug APK
+        yes | buildozer -v android debug 2>&1 | tee build.log
+        
+        # Check result
+        if ls bin/*.apk 1> /dev/null 2>&1; then
+          echo "✅ APK built successfully!"
+          ls -la bin/
+        else
+          echo "❌ APK build failed"
+          echo "=== Last 200 lines of build log ==="
+          tail -200 build.log
+          exit 1
+        fi
+
+    - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
         name: circle-counter-apk
         path: bin/*.apk
         retention-days: 30
+
+    - name: Upload build log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-log
+        path: build.log
+        retention-days: 7
 
   release:
     needs: build
@@ -37,7 +98,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     
     steps:
-    - name: Download APK artifact
+    - name: Download APK
       uses: actions/download-artifact@v4
       with:
         name: circle-counter-apk
