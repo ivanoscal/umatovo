@@ -10,8 +10,8 @@ import numpy as np
 class CircleDetector:
     """Класс для детектирования круглых объектов на изображении"""
     
-    def __init__(self, dp=1.2, min_dist=30, param1=50, param2=30, 
-                 min_radius=10, max_radius=200):
+    def __init__(self, dp=1.2, min_dist=20, param1=50, param2=30, 
+                 min_radius=5, max_radius=300):
         """
         Инициализация детектора кругов
         
@@ -53,9 +53,13 @@ class CircleDetector:
         # Применяем размытие для уменьшения шума
         blurred = cv2.GaussianBlur(gray, (9, 9), 2)
         
+        # Улучшаем контраст
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(blurred)
+        
         # Детектируем круги с помощью преобразования Хафа
         circles = cv2.HoughCircles(
-            blurred,
+            enhanced,
             cv2.HOUGH_GRADIENT,
             dp=self.dp,
             minDist=self.min_dist,
@@ -72,14 +76,41 @@ class CircleDetector:
             # Округляем координаты до целых чисел
             circles = np.uint16(np.around(circles))
             
-            for circle in circles[0, :]:
+            for i, circle in enumerate(circles[0, :], 1):
                 x, y, radius = circle
                 detected_circles.append((int(x), int(y), int(radius)))
                 
-                # Рисуем внешний круг (зелёный)
+                # Рисуем внешний круг (зелёный, толстый)
                 cv2.circle(output, (x, y), radius, (0, 255, 0), 3)
-                # Рисуем центр круга (красный)
-                cv2.circle(output, (x, y), 3, (0, 0, 255), -1)
+                
+                # Рисуем заполненный круг для фона номера (полупрозрачный)
+                overlay = output.copy()
+                # Размер круга для номера зависит от радиуса найденного круга
+                label_radius = max(15, min(radius // 2, 40))
+                cv2.circle(overlay, (x, y), label_radius, (255, 100, 0), -1)
+                cv2.addWeighted(overlay, 0.7, output, 0.3, 0, output)
+                
+                # Рисуем номер круга
+                label = str(i)
+                # Размер шрифта зависит от размера круга
+                font_scale = max(0.4, min(label_radius / 25, 1.5))
+                thickness = max(1, int(font_scale * 2))
+                
+                # Получаем размер текста для центрирования
+                (text_width, text_height), baseline = cv2.getTextSize(
+                    label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness
+                )
+                
+                # Позиция текста (центрируем)
+                text_x = int(x - text_width / 2)
+                text_y = int(y + text_height / 2)
+                
+                # Рисуем текст (белый)
+                cv2.putText(
+                    output, label, (text_x, text_y),
+                    cv2.FONT_HERSHEY_SIMPLEX, font_scale,
+                    (255, 255, 255), thickness, cv2.LINE_AA
+                )
                 
                 count += 1
         
@@ -154,4 +185,3 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Ошибка: {e}")
         sys.exit(1)
-
