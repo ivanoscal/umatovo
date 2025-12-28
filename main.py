@@ -25,7 +25,7 @@ from circle_detector import CircleDetector
 
 
 class TouchableImage(Image):
-    """Изображение с поддержкой тапов для добавления кругов"""
+    """Изображение с поддержкой тапов"""
     
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -33,7 +33,6 @@ class TouchableImage(Image):
     
     def on_touch_down(self, touch):
         if self.collide_point(*touch.pos) and self.app and self.app.current_image is not None:
-            # Преобразуем координаты тапа в координаты изображения
             self.app.add_manual_circle(touch.pos)
             return True
         return super().on_touch_down(touch)
@@ -47,26 +46,27 @@ class CircleCounterApp(App):
         self.detector = CircleDetector()
         self.current_image = None
         self.result_image = None
+        self.base_result_image = None  # Изображение до ручных добавлений
         self.detected_count = 0
-        self.manual_count = 0
+        self.manual_circles = []  # Список ручных кругов для отмены
         self.circles = []
         self.median_radius = 15
         
         Window.clearcolor = (0.1, 0.1, 0.1, 1)
         
-        self.layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
+        self.layout = BoxLayout(orientation='vertical', padding=10, spacing=8)
         
         # Заголовок
         self.layout.add_widget(Label(
             text='Circle Counter',
             font_size='24sp',
-            size_hint=(1, 0.06),
+            size_hint=(1, 0.05),
             bold=True
         ))
         
-        # Изображение с поддержкой тапов
+        # Изображение
         self.image_widget = TouchableImage(
-            size_hint=(1, 0.6),
+            size_hint=(1, 0.62),
             allow_stretch=True,
             keep_ratio=True
         )
@@ -75,10 +75,10 @@ class CircleCounterApp(App):
         
         # Подсказка
         self.hint_label = Label(
-            text='Тапните на пропущенный объект чтобы добавить',
-            font_size='12sp',
-            size_hint=(1, 0.04),
-            color=(0.7, 0.7, 0.7, 1)
+            text='Тапните чтобы добавить пропущенный объект',
+            font_size='11sp',
+            size_hint=(1, 0.03),
+            color=(0.6, 0.6, 0.6, 1)
         )
         self.layout.add_widget(self.hint_label)
         
@@ -86,44 +86,56 @@ class CircleCounterApp(App):
         self.result_label = Label(
             text='Выберите фото для анализа',
             font_size='18sp',
-            size_hint=(1, 0.08),
-            halign='center',
-            valign='middle'
+            size_hint=(1, 0.07),
+            halign='center'
         )
-        self.result_label.bind(size=self.result_label.setter('text_size'))
         self.layout.add_widget(self.result_label)
         
-        # Кнопки
-        btn_layout = BoxLayout(size_hint=(1, 0.12), spacing=10)
+        # Кнопки ряд 1: Камера и Галерея
+        btn_layout1 = BoxLayout(size_hint=(1, 0.10), spacing=8)
         
         camera_btn = Button(
             text='Камера',
-            font_size='16sp',
+            font_size='15sp',
             background_color=(0.2, 0.5, 0.8, 1),
             background_normal=''
         )
         camera_btn.bind(on_press=self.open_camera)
-        btn_layout.add_widget(camera_btn)
+        btn_layout1.add_widget(camera_btn)
         
         gallery_btn = Button(
             text='Галерея',
-            font_size='16sp',
+            font_size='15sp',
             background_color=(0.2, 0.6, 0.3, 1),
             background_normal=''
         )
         gallery_btn.bind(on_press=self.open_gallery)
-        btn_layout.add_widget(gallery_btn)
+        btn_layout1.add_widget(gallery_btn)
+        
+        self.layout.add_widget(btn_layout1)
+        
+        # Кнопки ряд 2: Назад и Сброс
+        btn_layout2 = BoxLayout(size_hint=(1, 0.10), spacing=8)
+        
+        undo_btn = Button(
+            text='← Назад',
+            font_size='15sp',
+            background_color=(0.5, 0.4, 0.2, 1),
+            background_normal=''
+        )
+        undo_btn.bind(on_press=self.undo_last)
+        btn_layout2.add_widget(undo_btn)
         
         reset_btn = Button(
-            text='Сброс',
-            font_size='16sp',
-            background_color=(0.6, 0.3, 0.3, 1),
+            text='Сброс всех',
+            font_size='15sp',
+            background_color=(0.6, 0.25, 0.25, 1),
             background_normal=''
         )
         reset_btn.bind(on_press=self.reset_manual)
-        btn_layout.add_widget(reset_btn)
+        btn_layout2.add_widget(reset_btn)
         
-        self.layout.add_widget(btn_layout)
+        self.layout.add_widget(btn_layout2)
         
         if platform == 'android':
             Clock.schedule_once(self._request_permissions, 0.5)
@@ -146,13 +158,10 @@ class CircleCounterApp(App):
         if self.result_image is None:
             return
         
-        # Получаем размеры виджета и изображения
         widget_w, widget_h = self.image_widget.size
         widget_x, widget_y = self.image_widget.pos
-        
         img_h, img_w = self.result_image.shape[:2]
         
-        # Вычисляем масштаб и смещение (keep_ratio=True)
         scale_w = widget_w / img_w
         scale_h = widget_h / img_h
         scale = min(scale_w, scale_h)
@@ -163,74 +172,99 @@ class CircleCounterApp(App):
         offset_x = widget_x + (widget_w - displayed_w) / 2
         offset_y = widget_y + (widget_h - displayed_h) / 2
         
-        # Преобразуем координаты тапа в координаты изображения
         touch_x, touch_y = touch_pos
-        
         img_x = (touch_x - offset_x) / scale
-        img_y = img_h - (touch_y - offset_y) / scale  # Инвертируем Y
+        img_y = img_h - (touch_y - offset_y) / scale
         
-        # Проверяем что тап внутри изображения
         if 0 <= img_x < img_w and 0 <= img_y < img_h:
-            self.manual_count += 1
-            total = self.detected_count + self.manual_count
-            
-            # Добавляем круг на изображение
             x, y = int(img_x), int(img_y)
             r = int(self.median_radius)
             
-            # Рисуем круг (синий для ручных)
-            cv2.circle(self.result_image, (x, y), r, (255, 100, 0), 2)
-            cv2.circle(self.result_image, (x, y), 9, (255, 100, 0), -1)
+            # Сохраняем для отмены
+            self.manual_circles.append((x, y, r))
+            
+            total = self.detected_count + len(self.manual_circles)
+            
+            # Рисуем белый круг
+            cv2.circle(self.result_image, (x, y), r, (255, 255, 255), 2)
+            cv2.circle(self.result_image, (x, y), 9, (255, 255, 255), -1)
             
             label = str(total)
             font_scale = 0.32
             (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 1)
             cv2.putText(self.result_image, label, (x - tw//2, y + th//2),
-                       cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), 1, cv2.LINE_AA)
+                       cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), 1, cv2.LINE_AA)
             
             self._update_display()
             self._update_result_text()
-            
-            Logger.info(f"Manual circle added at ({x}, {y}), total: {total}")
+    
+    def undo_last(self, instance):
+        """Отмена последнего добавленного круга"""
+        if not self.manual_circles or self.base_result_image is None:
+            return
+        
+        # Удаляем последний круг
+        self.manual_circles.pop()
+        
+        # Перерисовываем с нуля
+        self.result_image = self.base_result_image.copy()
+        
+        # Добавляем оставшиеся ручные круги
+        for i, (x, y, r) in enumerate(self.manual_circles):
+            num = self.detected_count + i + 1
+            cv2.circle(self.result_image, (x, y), r, (255, 255, 255), 2)
+            cv2.circle(self.result_image, (x, y), 9, (255, 255, 255), -1)
+            label = str(num)
+            font_scale = 0.32
+            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 1)
+            cv2.putText(self.result_image, label, (x - tw//2, y + th//2),
+                       cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), 1, cv2.LINE_AA)
+        
+        self._update_display()
+        self._update_result_text()
     
     def reset_manual(self, instance):
-        """Сброс ручных добавлений"""
-        if self.current_image is not None:
-            self.manual_count = 0
-            self._process_and_display(self.current_image.copy())
+        """Сброс всех ручных добавлений"""
+        if self.base_result_image is not None:
+            self.manual_circles = []
+            self.result_image = self.base_result_image.copy()
+            self._update_display()
+            self._update_result_text()
     
     def _update_result_text(self):
-        """Обновление текста результата"""
-        total = self.detected_count + self.manual_count
+        total = self.detected_count + len(self.manual_circles)
+        manual = len(self.manual_circles)
         
         if total == 0:
             self.result_label.text = 'Круглых объектов не найдено'
-        elif self.manual_count > 0:
-            self.result_label.text = f'Найдено: {self.detected_count} + {self.manual_count} = {total}'
+        elif manual > 0:
+            self.result_label.text = f'Найдено: {self.detected_count} + {manual} = {total}'
         else:
-            if total == 1:
-                self.result_label.text = 'Найден 1 круглый объект'
-            elif total < 5:
-                self.result_label.text = f'Найдено {total} круглых объекта'
-            else:
-                self.result_label.text = f'Найдено {total} круглых объектов'
+            self.result_label.text = f'Найдено: {total}'
     
     def open_camera(self, instance):
+        """Открытие камеры"""
         if platform == 'android':
             try:
-                from plyer import camera
-                try:
-                    from android.storage import app_storage_path
-                    photo_dir = app_storage_path()
-                except:
-                    photo_dir = tempfile.gettempdir()
+                # Используем Intent напрямую для камеры
+                from android import activity
+                from jnius import autoclass
                 
-                photo_path = os.path.join(photo_dir, 'photo.jpg')
-                camera.take_picture(filename=photo_path, on_complete=self._on_photo_taken)
+                Intent = autoclass('android.content.Intent')
+                MediaStore = autoclass('android.provider.MediaStore')
+                
+                intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+                activity.start_activity_for_result(intent, 1)
+                
+                # Устанавливаем обработчик результата
+                activity.bind(on_activity_result=self._on_camera_result)
+                
             except Exception as e:
-                Logger.error(f"Camera: {e}")
-                self.result_label.text = f'Ошибка камеры: {e}'
+                Logger.error(f"Camera Intent: {e}")
+                # Fallback - используем галерею
+                self.result_label.text = 'Камера недоступна. Используйте галерею.'
         else:
+            # Десктоп
             try:
                 cap = cv2.VideoCapture(0)
                 ret, frame = cap.read()
@@ -238,12 +272,45 @@ class CircleCounterApp(App):
                 if ret:
                     self.current_image = frame.copy()
                     self._process_and_display(frame)
+                else:
+                    self.result_label.text = 'Камера недоступна'
             except Exception as e:
                 self.result_label.text = f'Ошибка: {e}'
     
-    def _on_photo_taken(self, filepath):
-        if filepath and os.path.exists(filepath):
-            self._load_and_process(filepath)
+    def _on_camera_result(self, request_code, result_code, intent):
+        """Обработка результата камеры"""
+        if request_code == 1 and intent:
+            try:
+                from jnius import autoclass
+                
+                # Получаем bitmap из intent
+                extras = intent.getExtras()
+                if extras:
+                    bitmap = extras.get('data')
+                    if bitmap:
+                        # Конвертируем Bitmap в numpy array
+                        width = bitmap.getWidth()
+                        height = bitmap.getHeight()
+                        
+                        Bitmap = autoclass('android.graphics.Bitmap')
+                        ByteArrayOutputStream = autoclass('java.io.ByteArrayOutputStream')
+                        CompressFormat = autoclass('android.graphics.Bitmap$CompressFormat')
+                        
+                        stream = ByteArrayOutputStream()
+                        bitmap.compress(CompressFormat.PNG, 100, stream)
+                        byte_array = stream.toByteArray()
+                        
+                        # Декодируем в OpenCV
+                        nparr = np.frombuffer(bytes(byte_array), np.uint8)
+                        image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                        
+                        if image is not None:
+                            self.current_image = image.copy()
+                            self._process_and_display(image)
+                            
+            except Exception as e:
+                Logger.error(f"Camera result: {e}")
+                self.result_label.text = f'Ошибка: {e}'
     
     def open_gallery(self, instance):
         if platform == 'android':
@@ -301,17 +368,17 @@ class CircleCounterApp(App):
     def _process_and_display(self, image):
         try:
             self.result_label.text = 'Обработка...'
-            self.manual_count = 0
+            self.manual_circles = []
             
             count, circles, result_image = self.detector.detect_circles(image)
             
             self.detected_count = count
             self.circles = circles
             self.result_image = result_image
+            self.base_result_image = result_image.copy()  # Сохраняем базовое
             
-            # Вычисляем медианный радиус для ручного добавления
             if circles:
-                self.median_radius = np.median([c[2] for c in circles])
+                self.median_radius = int(np.median([c[2] for c in circles]))
             
             self._update_result_text()
             self._update_display()
@@ -321,10 +388,8 @@ class CircleCounterApp(App):
             self.result_label.text = f'Ошибка: {e}'
     
     def _update_display(self):
-        """Обновление отображения изображения"""
         if self.result_image is None:
             return
-        
         try:
             height, width = self.result_image.shape[:2]
             rgb_image = cv2.cvtColor(self.result_image, cv2.COLOR_BGR2RGB)
@@ -334,7 +399,6 @@ class CircleCounterApp(App):
             texture = Texture.create(size=(width, height), colorfmt='rgb')
             texture.blit_buffer(buf, colorfmt='rgb', bufferfmt='ubyte')
             self.image_widget.texture = texture
-            
         except Exception as e:
             Logger.error(f"Display: {e}")
 

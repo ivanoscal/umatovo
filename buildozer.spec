@@ -29,7 +29,7 @@ version = 1.0.0
 
 # (list) Application requirements
 # comma separated e.g. requirements = sqlite3,kivy
-requirements = python3,kivy,numpy,plyer,pillow,opencv
+requirements = python3,kivy,numpy,plyer,pillow,opencv,pyjnius
 
 # (str) Custom source folders for requirements
 # Sets custom source for any requirements with recipes
@@ -43,7 +43,7 @@ requirements = python3,kivy,numpy,plyer,pillow,opencv
 
 # (list) Supported orientations
 # Valid options are: landscape, sensorLandscape, portrait, sensorPortrait, all
-orientation = portrait
+orientation = all
 
 # (list) List of service to declare
 #services = NAME:ENTRYPOINT_TO_PY,NAME2:ENTRYPOINT2_TO_PY
