@@ -1,6 +1,5 @@
 """
 Circle Counter - Android приложение для подсчёта круглых объектов
-Использует Kivy для интерфейса и OpenCV для распознавания
 """
 
 import os
@@ -17,6 +16,7 @@ from kivy.graphics.texture import Texture
 from kivy.clock import Clock
 from kivy.utils import platform
 from kivy.logger import Logger
+from kivy.core.window import Window
 
 import cv2
 import numpy as np
@@ -25,284 +25,246 @@ from circle_detector import CircleDetector
 
 
 class CircleCounterApp(App):
-    """Главное приложение для подсчёта кругов"""
+    """Главное приложение"""
     
     def build(self):
         self.title = 'Circle Counter'
         self.detector = CircleDetector()
-        self.temp_photo_path = None
+        self.current_image = None
+        
+        # Устанавливаем цвет фона
+        Window.clearcolor = (0.1, 0.1, 0.1, 1)
         
         # Главный layout
-        self.layout = BoxLayout(orientation='vertical', padding=20, spacing=15)
+        self.layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
         
         # Заголовок
-        title_label = Label(
+        self.layout.add_widget(Label(
             text='Circle Counter',
-            font_size='28sp',
-            size_hint=(1, 0.1),
+            font_size='24sp',
+            size_hint=(1, 0.08),
             bold=True
-        )
-        self.layout.add_widget(title_label)
+        ))
         
-        # Область для отображения изображения
+        # Область для изображения
         self.image_widget = Image(
-            size_hint=(1, 0.5),
+            size_hint=(1, 0.6),
             allow_stretch=True,
             keep_ratio=True
         )
         self.layout.add_widget(self.image_widget)
         
-        # Метка с результатом
+        # Результат
         self.result_label = Label(
-            text='Выберите изображение или сделайте фото',
+            text='Выберите фото для анализа',
             font_size='18sp',
             size_hint=(1, 0.1),
-            halign='center'
+            halign='center',
+            valign='middle'
         )
+        self.result_label.bind(size=self.result_label.setter('text_size'))
         self.layout.add_widget(self.result_label)
         
         # Кнопки
-        buttons_layout = BoxLayout(
-            orientation='horizontal', 
-            size_hint=(1, 0.15),
-            spacing=10
-        )
+        btn_layout = BoxLayout(size_hint=(1, 0.15), spacing=10)
         
-        # Кнопка камеры
         camera_btn = Button(
             text='Камера',
             font_size='18sp',
-            background_color=(0.2, 0.6, 1, 1)
+            background_color=(0.2, 0.5, 0.8, 1),
+            background_normal=''
         )
         camera_btn.bind(on_press=self.open_camera)
-        buttons_layout.add_widget(camera_btn)
+        btn_layout.add_widget(camera_btn)
         
-        # Кнопка галереи
         gallery_btn = Button(
             text='Галерея',
             font_size='18sp',
-            background_color=(0.2, 0.8, 0.4, 1)
+            background_color=(0.2, 0.6, 0.3, 1),
+            background_normal=''
         )
         gallery_btn.bind(on_press=self.open_gallery)
-        buttons_layout.add_widget(gallery_btn)
+        btn_layout.add_widget(gallery_btn)
         
-        self.layout.add_widget(buttons_layout)
+        self.layout.add_widget(btn_layout)
         
-        # Запрашиваем разрешения на Android при старте
+        # Запрос разрешений на Android
         if platform == 'android':
-            Clock.schedule_once(self._request_android_permissions, 1)
+            Clock.schedule_once(self._request_permissions, 0.5)
         
         return self.layout
     
-    def _request_android_permissions(self, dt):
-        """Запрос разрешений на Android"""
-        if platform == 'android':
-            try:
-                from android.permissions import request_permissions, Permission
-                request_permissions([
-                    Permission.CAMERA,
-                    Permission.READ_EXTERNAL_STORAGE,
-                    Permission.WRITE_EXTERNAL_STORAGE,
-                ])
-                Logger.info("Permissions requested")
-            except Exception as e:
-                Logger.error(f"Permission request error: {e}")
+    def _request_permissions(self, dt):
+        """Запрос разрешений Android"""
+        try:
+            from android.permissions import request_permissions, Permission
+            request_permissions([
+                Permission.CAMERA,
+                Permission.READ_EXTERNAL_STORAGE,
+                Permission.WRITE_EXTERNAL_STORAGE,
+            ])
+        except Exception as e:
+            Logger.error(f"Permissions: {e}")
     
     def open_camera(self, instance):
-        """Открытие камеры"""
-        Logger.info("Camera button pressed")
-        
+        """Открыть камеру"""
         if platform == 'android':
-            self._android_camera()
-        else:
-            self._desktop_camera()
-    
-    def _android_camera(self):
-        """Камера на Android через plyer"""
-        try:
-            from plyer import camera
-            
-            # Создаём путь для фото
-            if platform == 'android':
-                from android.storage import app_storage_path
-                temp_dir = app_storage_path()
-            else:
-                temp_dir = tempfile.gettempdir()
-            
-            self.temp_photo_path = os.path.join(temp_dir, 'circle_photo.jpg')
-            Logger.info(f"Photo path: {self.temp_photo_path}")
-            
-            # Делаем фото
-            camera.take_picture(
-                filename=self.temp_photo_path,
-                on_complete=self._on_camera_complete
-            )
-            
-        except Exception as e:
-            Logger.error(f"Camera error: {e}")
-            self.result_label.text = f'Ошибка камеры: {str(e)}'
-    
-    def _desktop_camera(self):
-        """Камера на десктопе (для тестирования)"""
-        try:
-            cap = cv2.VideoCapture(0)
-            if not cap.isOpened():
-                self.result_label.text = 'Камера недоступна'
-                return
-            
-            ret, frame = cap.read()
-            cap.release()
-            
-            if ret:
-                self._process_image(frame)
-            else:
-                self.result_label.text = 'Не удалось сделать снимок'
-                
-        except Exception as e:
-            self.result_label.text = f'Ошибка: {str(e)}'
-    
-    def _on_camera_complete(self, filepath):
-        """Callback после съёмки фото"""
-        Logger.info(f"Camera complete: {filepath}")
-        
-        if filepath and os.path.exists(filepath):
             try:
-                image = cv2.imread(filepath)
-                if image is not None:
-                    self._process_image(image)
-                else:
-                    self.result_label.text = 'Не удалось загрузить фото'
+                from plyer import camera
+                
+                # Путь для сохранения фото
+                try:
+                    from android.storage import app_storage_path
+                    photo_dir = app_storage_path()
+                except:
+                    photo_dir = tempfile.gettempdir()
+                
+                photo_path = os.path.join(photo_dir, 'photo.jpg')
+                
+                camera.take_picture(
+                    filename=photo_path,
+                    on_complete=self._on_photo_taken
+                )
             except Exception as e:
-                Logger.error(f"Load error: {e}")
-                self.result_label.text = f'Ошибка: {str(e)}'
+                Logger.error(f"Camera: {e}")
+                self.result_label.text = f'Ошибка камеры: {e}'
+        else:
+            # Десктоп - снимок с веб-камеры
+            try:
+                cap = cv2.VideoCapture(0)
+                ret, frame = cap.read()
+                cap.release()
+                if ret:
+                    self._process_and_display(frame)
+                else:
+                    self.result_label.text = 'Камера недоступна'
+            except Exception as e:
+                self.result_label.text = f'Ошибка: {e}'
+    
+    def _on_photo_taken(self, filepath):
+        """Фото сделано"""
+        Logger.info(f"Photo: {filepath}")
+        if filepath and os.path.exists(filepath):
+            self._load_and_process(filepath)
         else:
             self.result_label.text = 'Фото не сохранено'
     
     def open_gallery(self, instance):
-        """Открытие галереи"""
-        Logger.info("Gallery button pressed")
-        
+        """Открыть галерею"""
         if platform == 'android':
-            self._android_gallery()
+            try:
+                from plyer import filechooser
+                filechooser.open_file(
+                    on_selection=self._on_file_selected,
+                    mime_type="image/*"
+                )
+            except Exception as e:
+                Logger.error(f"Gallery: {e}")
+                self.result_label.text = f'Ошибка: {e}'
         else:
-            self._desktop_gallery()
+            self._show_file_chooser()
     
-    def _android_gallery(self):
-        """Галерея на Android через plyer"""
-        try:
-            from plyer import filechooser
-            
-            filechooser.open_file(
-                on_selection=self._on_file_selected,
-                filters=[("Images", "*.png", "*.jpg", "*.jpeg")],
-                mime_type="image/*"
-            )
-            
-        except Exception as e:
-            Logger.error(f"Gallery error: {e}")
-            self.result_label.text = f'Ошибка галереи: {str(e)}'
-    
-    def _desktop_gallery(self):
-        """Файловый диалог на десктопе"""
+    def _show_file_chooser(self):
+        """Файловый диалог для десктопа"""
         content = BoxLayout(orientation='vertical')
         
-        start_path = os.path.expanduser('~')
-        
-        filechooser = FileChooserListView(
-            path=start_path,
+        fc = FileChooserListView(
+            path=os.path.expanduser('~'),
             filters=['*.png', '*.jpg', '*.jpeg', '*.PNG', '*.JPG', '*.JPEG']
         )
-        content.add_widget(filechooser)
+        content.add_widget(fc)
         
-        btn_layout = BoxLayout(size_hint=(1, 0.1), spacing=10)
+        btns = BoxLayout(size_hint=(1, 0.1), spacing=5)
         
         select_btn = Button(text='Выбрать')
         cancel_btn = Button(text='Отмена')
+        btns.add_widget(select_btn)
+        btns.add_widget(cancel_btn)
+        content.add_widget(btns)
         
-        btn_layout.add_widget(select_btn)
-        btn_layout.add_widget(cancel_btn)
-        content.add_widget(btn_layout)
-        
-        popup = Popup(
-            title='Выберите изображение',
-            content=content,
-            size_hint=(0.9, 0.9)
-        )
+        popup = Popup(title='Выберите изображение', content=content, size_hint=(0.95, 0.95))
         
         def on_select(inst):
-            if filechooser.selection:
+            if fc.selection:
                 popup.dismiss()
-                self._on_file_selected(filechooser.selection)
-        
-        def on_cancel(inst):
-            popup.dismiss()
+                self._on_file_selected(fc.selection)
         
         select_btn.bind(on_press=on_select)
-        cancel_btn.bind(on_press=on_cancel)
-        
+        cancel_btn.bind(on_press=lambda x: popup.dismiss())
         popup.open()
     
     def _on_file_selected(self, selection):
-        """Обработка выбранного файла"""
-        Logger.info(f"File selected: {selection}")
-        
-        if selection and len(selection) > 0:
-            filepath = selection[0]
-            
+        """Файл выбран"""
+        Logger.info(f"Selected: {selection}")
+        if selection:
+            filepath = selection[0] if isinstance(selection, list) else selection
             if os.path.exists(filepath):
-                try:
-                    image = cv2.imread(filepath)
-                    if image is not None:
-                        self._process_image(image)
-                    else:
-                        self.result_label.text = 'Не удалось загрузить изображение'
-                except Exception as e:
-                    Logger.error(f"Load error: {e}")
-                    self.result_label.text = f'Ошибка: {str(e)}'
-            else:
-                self.result_label.text = 'Файл не найден'
+                self._load_and_process(filepath)
     
-    def _process_image(self, image):
-        """Обработка изображения и подсчёт кругов"""
-        Logger.info("Processing image")
-        
+    def _load_and_process(self, filepath):
+        """Загрузить и обработать изображение"""
         try:
+            image = cv2.imread(filepath)
+            if image is not None:
+                self._process_and_display(image)
+            else:
+                self.result_label.text = 'Не удалось загрузить изображение'
+        except Exception as e:
+            Logger.error(f"Load: {e}")
+            self.result_label.text = f'Ошибка загрузки: {e}'
+    
+    def _process_and_display(self, image):
+        """Обработать и отобразить"""
+        try:
+            self.result_label.text = 'Обработка...'
+            
             # Детектируем круги
             count, circles, result_image = self.detector.detect_circles(image)
             
-            # Обновляем результат
+            # Обновляем текст
             if count == 0:
                 self.result_label.text = 'Круглых объектов не найдено'
             elif count == 1:
                 self.result_label.text = 'Найден 1 круглый объект'
+            elif count < 5:
+                self.result_label.text = f'Найдено {count} круглых объекта'
             else:
                 self.result_label.text = f'Найдено {count} круглых объектов'
             
             # Отображаем результат
-            self._display_image(result_image)
+            self._show_image(result_image)
             
         except Exception as e:
-            Logger.error(f"Process error: {e}")
-            self.result_label.text = f'Ошибка обработки: {str(e)}'
+            Logger.error(f"Process: {e}")
+            self.result_label.text = f'Ошибка: {e}'
     
-    def _display_image(self, image):
-        """Отображение изображения"""
+    def _show_image(self, cv_image):
+        """Отобразить OpenCV изображение в Kivy"""
         try:
-            # Конвертируем BGR в RGB
-            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            # Переворачиваем для Kivy
-            image_rgb = cv2.flip(image_rgb, 0)
+            # Получаем размеры
+            height, width = cv_image.shape[:2]
+            
+            # BGR -> RGB
+            rgb_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)
+            
+            # Переворачиваем вертикально для Kivy (Kivy использует нижний левый угол как начало)
+            flipped = cv2.flip(rgb_image, 0)
+            
+            # Преобразуем в bytes
+            buf = flipped.tobytes()
             
             # Создаём текстуру
-            texture = Texture.create(
-                size=(image.shape[1], image.shape[0]),
-                colorfmt='rgb'
-            )
-            texture.blit_buffer(image_rgb.tobytes(), colorfmt='rgb', bufferfmt='ubyte')
+            texture = Texture.create(size=(width, height), colorfmt='rgb')
+            texture.blit_buffer(buf, colorfmt='rgb', bufferfmt='ubyte')
+            
+            # Применяем к виджету
             self.image_widget.texture = texture
             
+            Logger.info(f"Image displayed: {width}x{height}")
+            
         except Exception as e:
-            Logger.error(f"Display error: {e}")
+            Logger.error(f"Display: {e}")
+            self.result_label.text = f'Ошибка отображения: {e}'
 
 
 if __name__ == '__main__':
