@@ -5,7 +5,6 @@ Circle Counter - Android приложение для подсчёта кругл
 
 import os
 import tempfile
-from io import BytesIO
 
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
@@ -14,10 +13,10 @@ from kivy.uix.label import Label
 from kivy.uix.image import Image
 from kivy.uix.popup import Popup
 from kivy.uix.filechooser import FileChooserListView
-from kivy.core.image import Image as CoreImage
 from kivy.graphics.texture import Texture
 from kivy.clock import Clock
 from kivy.utils import platform
+from kivy.logger import Logger
 
 import cv2
 import numpy as np
@@ -31,15 +30,14 @@ class CircleCounterApp(App):
     def build(self):
         self.title = 'Circle Counter'
         self.detector = CircleDetector()
-        self.camera = None
-        self.camera_active = False
+        self.temp_photo_path = None
         
         # Главный layout
         self.layout = BoxLayout(orientation='vertical', padding=20, spacing=15)
         
         # Заголовок
         title_label = Label(
-            text='🔵 Circle Counter',
+            text='Circle Counter',
             font_size='28sp',
             size_hint=(1, 0.1),
             bold=True
@@ -57,7 +55,7 @@ class CircleCounterApp(App):
         # Метка с результатом
         self.result_label = Label(
             text='Выберите изображение или сделайте фото',
-            font_size='20sp',
+            font_size='18sp',
             size_hint=(1, 0.1),
             halign='center'
         )
@@ -72,7 +70,7 @@ class CircleCounterApp(App):
         
         # Кнопка камеры
         camera_btn = Button(
-            text='📷 Камера',
+            text='Камера',
             font_size='18sp',
             background_color=(0.2, 0.6, 1, 1)
         )
@@ -81,7 +79,7 @@ class CircleCounterApp(App):
         
         # Кнопка галереи
         gallery_btn = Button(
-            text='🖼 Галерея',
+            text='Галерея',
             font_size='18sp',
             background_color=(0.2, 0.8, 0.4, 1)
         )
@@ -90,155 +88,125 @@ class CircleCounterApp(App):
         
         self.layout.add_widget(buttons_layout)
         
-        # Кнопка захвата (для камеры)
-        self.capture_btn = Button(
-            text='📸 Сделать снимок',
-            font_size='18sp',
-            size_hint=(1, 0.1),
-            background_color=(1, 0.5, 0.2, 1),
-            disabled=True
-        )
-        self.capture_btn.bind(on_press=self.capture_photo)
-        self.layout.add_widget(self.capture_btn)
+        # Запрашиваем разрешения на Android при старте
+        if platform == 'android':
+            Clock.schedule_once(self._request_android_permissions, 1)
         
         return self.layout
     
-    def open_camera(self, instance):
-        """Открытие камеры для съёмки"""
+    def _request_android_permissions(self, dt):
+        """Запрос разрешений на Android"""
         if platform == 'android':
-            self._open_android_camera()
-        else:
-            self._open_desktop_camera()
+            try:
+                from android.permissions import request_permissions, Permission
+                request_permissions([
+                    Permission.CAMERA,
+                    Permission.READ_EXTERNAL_STORAGE,
+                    Permission.WRITE_EXTERNAL_STORAGE,
+                ])
+                Logger.info("Permissions requested")
+            except Exception as e:
+                Logger.error(f"Permission request error: {e}")
     
-    def _open_android_camera(self):
-        """Открытие камеры на Android"""
+    def open_camera(self, instance):
+        """Открытие камеры"""
+        Logger.info("Camera button pressed")
+        
+        if platform == 'android':
+            self._android_camera()
+        else:
+            self._desktop_camera()
+    
+    def _android_camera(self):
+        """Камера на Android через plyer"""
         try:
-            from android.permissions import request_permissions, Permission
             from plyer import camera
             
-            def on_permissions(permissions, grants):
-                if all(grants):
-                    # Создаём временный файл для фото
-                    temp_dir = tempfile.gettempdir()
-                    self.temp_photo_path = os.path.join(temp_dir, 'circle_photo.jpg')
-                    camera.take_picture(
-                        filename=self.temp_photo_path,
-                        on_complete=self._on_camera_complete
-                    )
+            # Создаём путь для фото
+            if platform == 'android':
+                from android.storage import app_storage_path
+                temp_dir = app_storage_path()
+            else:
+                temp_dir = tempfile.gettempdir()
             
-            request_permissions([
-                Permission.CAMERA,
-                Permission.WRITE_EXTERNAL_STORAGE,
-                Permission.READ_EXTERNAL_STORAGE
-            ], on_permissions)
+            self.temp_photo_path = os.path.join(temp_dir, 'circle_photo.jpg')
+            Logger.info(f"Photo path: {self.temp_photo_path}")
             
-        except ImportError:
-            self.result_label.text = 'Камера недоступна на этом устройстве'
-    
-    def _open_desktop_camera(self):
-        """Открытие камеры на десктопе (для тестирования)"""
-        if self.camera_active:
-            self._stop_camera()
-            return
-        
-        self.camera = cv2.VideoCapture(0)
-        if not self.camera.isOpened():
-            self.result_label.text = 'Не удалось открыть камеру'
-            return
-        
-        self.camera_active = True
-        self.capture_btn.disabled = False
-        self.result_label.text = 'Камера активна. Нажмите "Сделать снимок"'
-        
-        # Запускаем обновление кадров
-        Clock.schedule_interval(self._update_camera_frame, 1.0 / 30.0)
-    
-    def _update_camera_frame(self, dt):
-        """Обновление кадра с камеры"""
-        if not self.camera_active or self.camera is None:
-            return False
-        
-        ret, frame = self.camera.read()
-        if ret:
-            # Конвертируем BGR в RGB для отображения
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            # Переворачиваем по вертикали для Kivy
-            frame_rgb = cv2.flip(frame_rgb, 0)
-            
-            # Создаём текстуру
-            texture = Texture.create(
-                size=(frame.shape[1], frame.shape[0]),
-                colorfmt='rgb'
+            # Делаем фото
+            camera.take_picture(
+                filename=self.temp_photo_path,
+                on_complete=self._on_camera_complete
             )
-            texture.blit_buffer(frame_rgb.tobytes(), colorfmt='rgb', bufferfmt='ubyte')
-            self.image_widget.texture = texture
+            
+        except Exception as e:
+            Logger.error(f"Camera error: {e}")
+            self.result_label.text = f'Ошибка камеры: {str(e)}'
     
-    def _stop_camera(self):
-        """Остановка камеры"""
-        self.camera_active = False
-        self.capture_btn.disabled = True
-        if self.camera is not None:
-            self.camera.release()
-            self.camera = None
-        Clock.unschedule(self._update_camera_frame)
-    
-    def capture_photo(self, instance):
-        """Захват фото с камеры"""
-        if self.camera is None or not self.camera_active:
-            return
-        
-        ret, frame = self.camera.read()
-        if ret:
-            self._stop_camera()
-            self._process_image(frame)
+    def _desktop_camera(self):
+        """Камера на десктопе (для тестирования)"""
+        try:
+            cap = cv2.VideoCapture(0)
+            if not cap.isOpened():
+                self.result_label.text = 'Камера недоступна'
+                return
+            
+            ret, frame = cap.read()
+            cap.release()
+            
+            if ret:
+                self._process_image(frame)
+            else:
+                self.result_label.text = 'Не удалось сделать снимок'
+                
+        except Exception as e:
+            self.result_label.text = f'Ошибка: {str(e)}'
     
     def _on_camera_complete(self, filepath):
-        """Callback после съёмки на Android"""
+        """Callback после съёмки фото"""
+        Logger.info(f"Camera complete: {filepath}")
+        
         if filepath and os.path.exists(filepath):
-            image = cv2.imread(filepath)
-            if image is not None:
-                self._process_image(image)
-            else:
-                self.result_label.text = 'Ошибка загрузки фото'
+            try:
+                image = cv2.imread(filepath)
+                if image is not None:
+                    self._process_image(image)
+                else:
+                    self.result_label.text = 'Не удалось загрузить фото'
+            except Exception as e:
+                Logger.error(f"Load error: {e}")
+                self.result_label.text = f'Ошибка: {str(e)}'
+        else:
+            self.result_label.text = 'Фото не сохранено'
     
     def open_gallery(self, instance):
-        """Открытие галереи для выбора изображения"""
+        """Открытие галереи"""
+        Logger.info("Gallery button pressed")
+        
         if platform == 'android':
-            self._open_android_gallery()
+            self._android_gallery()
         else:
-            self._open_desktop_gallery()
+            self._desktop_gallery()
     
-    def _open_android_gallery(self):
-        """Открытие галереи на Android"""
+    def _android_gallery(self):
+        """Галерея на Android через plyer"""
         try:
-            from android.permissions import request_permissions, Permission
             from plyer import filechooser
             
-            def on_permissions(permissions, grants):
-                if all(grants):
-                    filechooser.open_file(
-                        on_selection=self._on_file_selected,
-                        filters=['*.png', '*.jpg', '*.jpeg']
-                    )
+            filechooser.open_file(
+                on_selection=self._on_file_selected,
+                filters=[("Images", "*.png", "*.jpg", "*.jpeg")],
+                mime_type="image/*"
+            )
             
-            request_permissions([
-                Permission.READ_EXTERNAL_STORAGE
-            ], on_permissions)
-            
-        except ImportError:
-            self._open_desktop_gallery()
+        except Exception as e:
+            Logger.error(f"Gallery error: {e}")
+            self.result_label.text = f'Ошибка галереи: {str(e)}'
     
-    def _open_desktop_gallery(self):
-        """Открытие файлового диалога на десктопе"""
-        self._stop_camera()
-        
+    def _desktop_gallery(self):
+        """Файловый диалог на десктопе"""
         content = BoxLayout(orientation='vertical')
         
-        # Определяем стартовую директорию
-        if platform == 'android':
-            start_path = '/sdcard/DCIM'
-        else:
-            start_path = os.path.expanduser('~')
+        start_path = os.path.expanduser('~')
         
         filechooser = FileChooserListView(
             path=start_path,
@@ -246,7 +214,6 @@ class CircleCounterApp(App):
         )
         content.add_widget(filechooser)
         
-        # Кнопки
         btn_layout = BoxLayout(size_hint=(1, 0.1), spacing=10)
         
         select_btn = Button(text='Выбрать')
@@ -262,12 +229,12 @@ class CircleCounterApp(App):
             size_hint=(0.9, 0.9)
         )
         
-        def on_select(instance):
+        def on_select(inst):
             if filechooser.selection:
                 popup.dismiss()
                 self._on_file_selected(filechooser.selection)
         
-        def on_cancel(instance):
+        def on_cancel(inst):
             popup.dismiss()
         
         select_btn.bind(on_press=on_select)
@@ -277,19 +244,28 @@ class CircleCounterApp(App):
     
     def _on_file_selected(self, selection):
         """Обработка выбранного файла"""
+        Logger.info(f"File selected: {selection}")
+        
         if selection and len(selection) > 0:
             filepath = selection[0]
+            
             if os.path.exists(filepath):
-                image = cv2.imread(filepath)
-                if image is not None:
-                    self._process_image(image)
-                else:
-                    self.result_label.text = 'Ошибка загрузки изображения'
+                try:
+                    image = cv2.imread(filepath)
+                    if image is not None:
+                        self._process_image(image)
+                    else:
+                        self.result_label.text = 'Не удалось загрузить изображение'
+                except Exception as e:
+                    Logger.error(f"Load error: {e}")
+                    self.result_label.text = f'Ошибка: {str(e)}'
             else:
                 self.result_label.text = 'Файл не найден'
     
     def _process_image(self, image):
         """Обработка изображения и подсчёт кругов"""
+        Logger.info("Processing image")
+        
         try:
             # Детектируем круги
             count, circles, result_image = self.detector.detect_circles(image)
@@ -298,7 +274,7 @@ class CircleCounterApp(App):
             if count == 0:
                 self.result_label.text = 'Круглых объектов не найдено'
             elif count == 1:
-                self.result_label.text = f'Найден 1 круглый объект'
+                self.result_label.text = 'Найден 1 круглый объект'
             else:
                 self.result_label.text = f'Найдено {count} круглых объектов'
             
@@ -306,28 +282,28 @@ class CircleCounterApp(App):
             self._display_image(result_image)
             
         except Exception as e:
+            Logger.error(f"Process error: {e}")
             self.result_label.text = f'Ошибка обработки: {str(e)}'
     
     def _display_image(self, image):
-        """Отображение изображения в виджете"""
-        # Конвертируем BGR в RGB
-        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        # Переворачиваем для Kivy
-        image_rgb = cv2.flip(image_rgb, 0)
-        
-        # Создаём текстуру
-        texture = Texture.create(
-            size=(image.shape[1], image.shape[0]),
-            colorfmt='rgb'
-        )
-        texture.blit_buffer(image_rgb.tobytes(), colorfmt='rgb', bufferfmt='ubyte')
-        self.image_widget.texture = texture
-    
-    def on_stop(self):
-        """Очистка при закрытии приложения"""
-        self._stop_camera()
+        """Отображение изображения"""
+        try:
+            # Конвертируем BGR в RGB
+            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            # Переворачиваем для Kivy
+            image_rgb = cv2.flip(image_rgb, 0)
+            
+            # Создаём текстуру
+            texture = Texture.create(
+                size=(image.shape[1], image.shape[0]),
+                colorfmt='rgb'
+            )
+            texture.blit_buffer(image_rgb.tobytes(), colorfmt='rgb', bufferfmt='ubyte')
+            self.image_widget.texture = texture
+            
+        except Exception as e:
+            Logger.error(f"Display error: {e}")
 
 
 if __name__ == '__main__':
     CircleCounterApp().run()
-
